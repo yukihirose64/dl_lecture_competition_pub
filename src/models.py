@@ -10,13 +10,18 @@ class BasicConvClassifier(nn.Module):
         num_classes: int,
         seq_len: int,
         in_channels: int,
-        hid_dim: int = 128
+        hid_dim: int = 2048
     ) -> None:
         super().__init__()
 
         self.blocks = nn.Sequential(
-            ConvBlock(in_channels, hid_dim),
-            ConvBlock(hid_dim, hid_dim),
+            ConvBlock(in_channels, hid_dim//8),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            ConvBlock(hid_dim//8, hid_dim//4),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            ConvBlock(hid_dim//4, hid_dim//2),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            ConvBlock(hid_dim//2, hid_dim),
         )
 
         self.head = nn.Sequential(
@@ -43,7 +48,7 @@ class ConvBlock(nn.Module):
         in_dim,
         out_dim,
         kernel_size: int = 3,
-        p_drop: float = 0.1,
+        p_drop: float = 0.25,
     ) -> None:
         super().__init__()
         
@@ -51,11 +56,11 @@ class ConvBlock(nn.Module):
         self.out_dim = out_dim
 
         self.conv0 = nn.Conv1d(in_dim, out_dim, kernel_size, padding="same")
-        self.conv1 = nn.Conv1d(out_dim, out_dim, kernel_size, padding="same")
+        # self.conv1 = nn.Conv1d(out_dim, out_dim, kernel_size, padding="same")
         # self.conv2 = nn.Conv1d(out_dim, out_dim, kernel_size) # , padding="same")
         
         self.batchnorm0 = nn.BatchNorm1d(num_features=out_dim)
-        self.batchnorm1 = nn.BatchNorm1d(num_features=out_dim)
+        # self.batchnorm1 = nn.BatchNorm1d(num_features=out_dim)
 
         self.dropout = nn.Dropout(p_drop)
 
@@ -67,8 +72,8 @@ class ConvBlock(nn.Module):
 
         X = F.gelu(self.batchnorm0(X))
 
-        X = self.conv1(X) + X  # skip connection
-        X = F.gelu(self.batchnorm1(X))
+        # X = self.conv1(X) + X  # skip connection
+        # X = F.gelu(self.batchnorm1(X))
 
         # X = self.conv2(X)
         # X = F.glu(X, dim=-2)
