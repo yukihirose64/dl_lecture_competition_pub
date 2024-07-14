@@ -51,6 +51,7 @@ def run(args: DictConfig):
     # ------------------
     #   Start training
     # ------------------  
+    max_val_acc = 0 
     accuracy_class = Accuracy(
         task="multiclass", num_classes=train_set.num_classes, top_k=10
     ).to(args.device)
@@ -73,7 +74,7 @@ def run(args: DictConfig):
             
             loss_class = F.cross_entropy(class_logits, y)
             loss_subject = F.cross_entropy(subject_logits, subject_idxs)
-            loss = loss_class + 0.5*loss_subject  # Combined loss
+            loss = loss_class + 0.25*loss_subject  # Combined loss
             
             train_loss.append(loss.item())
             

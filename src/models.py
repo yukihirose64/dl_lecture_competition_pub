@@ -25,7 +25,7 @@ class BasicConvClassifier(nn.Module):
             ConvBlock(hid_dim//2, hid_dim),
         )
 
-        self.head = nn.Sequential(
+        self.class_head = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
             Rearrange("b d 1 -> b d"),
             nn.Linear(hid_dim, num_classes),
@@ -37,6 +37,12 @@ class BasicConvClassifier(nn.Module):
             nn.Linear(hid_dim, num_subjects),
         )
 
+        nn.init.kaiming_normal_(self.class_head[2].weight, nonlinearity='relu')
+        nn.init.zeros_(self.class_head[2].bias)
+        
+        nn.init.kaiming_normal_(self.subject_head[2].weight, nonlinearity='relu')
+        nn.init.zeros_(self.subject_head[2].bias)
+        
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """_summary_
         Args:
@@ -74,13 +80,15 @@ class ConvBlock(nn.Module):
 
         self.dropout = nn.Dropout(p_drop)
 
+        nn.init.kaiming_normal_(self.conv0.weight, nonlinearity='relu')
+
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         if self.in_dim == self.out_dim:
             X = self.conv0(X) + X  # skip connection
         else:
             X = self.conv0(X)
 
-        X = F.gelu(self.batchnorm0(X))
+        X = F.relu(self.batchnorm0(X))
 
         # X = self.conv1(X) + X  # skip connection
         # X = F.gelu(self.batchnorm1(X))
