@@ -28,19 +28,19 @@ def run(args: DictConfig):
     loader_args = {"batch_size": args.batch_size, "num_workers": args.num_workers}
     
     train_set = ThingsMEGDataset("train", args.data_dir)
-    train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, **loader_args)
+    train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, pin_memory=True, **loader_args)
     val_set = ThingsMEGDataset("val", args.data_dir)
-    val_loader = torch.utils.data.DataLoader(val_set, shuffle=False, **loader_args)
+    val_loader = torch.utils.data.DataLoader(val_set, shuffle=False, pin_memory=True, **loader_args)
     test_set = ThingsMEGDataset("test", args.data_dir)
     test_loader = torch.utils.data.DataLoader(
-        test_set, shuffle=False, batch_size=args.batch_size, num_workers=args.num_workers
+        test_set, shuffle=False, pin_memory=True, batch_size=args.batch_size, num_workers=args.num_workers
     )
 
     # ------------------
     #       Model
     # ------------------
     model = BasicConvClassifier(
-        train_set.num_classes, train_set.seq_len, train_set.num_channels
+        train_set.num_classes, train_set.seq_len, train_set.num_channels, train_set.num_subjects
     ).to(args.device)
 
     # ------------------
@@ -51,66 +51,91 @@ def run(args: DictConfig):
     # ------------------
     #   Start training
     # ------------------  
-    max_val_acc = 0
-    accuracy = Accuracy(
+    accuracy_class = Accuracy(
         task="multiclass", num_classes=train_set.num_classes, top_k=10
+    ).to(args.device)
+    
+    accuracy_subject = Accuracy(
+        task="multiclass", num_classes=4
     ).to(args.device)
       
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1}/{args.epochs}")
         
-        train_loss, train_acc, val_loss, val_acc = [], [], [], []
+        train_loss, train_acc_class, train_acc_subject, val_loss, val_acc_class, val_acc_subject = [], [], [], [], [], []
+
         
         model.train()
         for X, y, subject_idxs in tqdm(train_loader, desc="Train"):
-            X, y = X.to(args.device), y.to(args.device)
+            X, y, subject_idxs = X.to(args.device), y.to(args.device), subject_idxs.to(args.device)
 
-            y_pred = model(X)
+            class_logits, subject_logits = model(X)
             
-            loss = F.cross_entropy(y_pred, y)
+            loss_class = F.cross_entropy(class_logits, y)
+            loss_subject = F.cross_entropy(subject_logits, subject_idxs)
+            loss = loss_class + 0.5*loss_subject  # Combined loss
+            
             train_loss.append(loss.item())
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            acc = accuracy(y_pred, y)
-            train_acc.append(acc.item())
+            acc_class = accuracy_class(class_logits, y)
+            acc_subject = accuracy_subject(subject_logits, subject_idxs)
+            
+            train_acc_class.append(acc_class.item())
+            train_acc_subject.append(acc_subject.item())
 
         model.eval()
         for X, y, subject_idxs in tqdm(val_loader, desc="Validation"):
-            X, y = X.to(args.device), y.to(args.device)
+            X, y, subject_idxs = X.to(args.device), y.to(args.device), subject_idxs.to(args.device)
             
             with torch.no_grad():
-                y_pred = model(X)
+                class_logits, subject_logits = model(X)
             
-            val_loss.append(F.cross_entropy(y_pred, y).item())
-            val_acc.append(accuracy(y_pred, y).item())
+            val_loss_class = F.cross_entropy(class_logits, y).item()
+            val_loss_subject = F.cross_entropy(subject_logits, subject_idxs).item()
+            val_loss_combined = val_loss_class + val_loss_subject
+            
+            val_loss.append(val_loss_combined)
+            val_acc_class.append(accuracy_class(class_logits, y).item())
+            val_acc_subject.append(accuracy_subject(subject_logits, subject_idxs).item())
 
-        print(f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}")
+        print(f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc class: {np.mean(train_acc_class):.3f} | train acc subject: {np.mean(train_acc_subject):.3f} | val loss: {np.mean(val_loss):.3f} | val acc class: {np.mean(val_acc_class):.3f} | val acc subject: {np.mean(val_acc_subject):.3f}")
         torch.save(model.state_dict(), os.path.join(logdir, "model_last.pt"))
         if args.use_wandb:
-            wandb.log({"train_loss": np.mean(train_loss), "train_acc": np.mean(train_acc), "val_loss": np.mean(val_loss), "val_acc": np.mean(val_acc)})
+            wandb.log({
+                "train_loss": np.mean(train_loss),
+                "train_acc_class": np.mean(train_acc_class),
+                "train_acc_subject": np.mean(train_acc_subject),
+                "val_loss": np.mean(val_loss),
+                "val_acc_class": np.mean(val_acc_class),
+                "val_acc_subject": np.mean(val_acc_subject)
+            })
         
-        if np.mean(val_acc) > max_val_acc:
+        if np.mean(val_acc_class) > max_val_acc:
             cprint("New best.", "cyan")
             torch.save(model.state_dict(), os.path.join(logdir, "model_best.pt"))
-            max_val_acc = np.mean(val_acc)
-            
+            max_val_acc = np.mean(val_acc_class)
     
     # ----------------------------------
     #  Start evaluation with best model
     # ----------------------------------
     model.load_state_dict(torch.load(os.path.join(logdir, "model_best.pt"), map_location=args.device))
 
-    preds = [] 
+    preds_class = [] 
     model.eval()
-    for X, subject_idxs in tqdm(test_loader, desc="Validation"):        
-        preds.append(model(X.to(args.device)).detach().cpu())
+    for X, subject_idxs in tqdm(test_loader, desc="Evaluation"):
+        X = X.to(args.device)
+        class_logits, subject_logits = model(X)
+        preds_class.append(class_logits.detach().cpu())
         
-    preds = torch.cat(preds, dim=0).numpy()
-    np.save(os.path.join(logdir, "submission"), preds)
-    cprint(f"Submission {preds.shape} saved at {logdir}", "cyan")
+    preds_class = torch.cat(preds_class, dim=0).numpy()
+    
+    np.save(os.path.join(logdir, "submission"), preds_class)
+    
+    cprint(f"Submission {preds_class.shape} saved at {logdir}", "cyan")
 
 
 if __name__ == "__main__":

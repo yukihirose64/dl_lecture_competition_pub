@@ -10,17 +10,18 @@ class BasicConvClassifier(nn.Module):
         num_classes: int,
         seq_len: int,
         in_channels: int,
-        hid_dim: int = 2048
+        hid_dim: int = 2048,
+        num_subjects: int
     ) -> None:
         super().__init__()
 
         self.blocks = nn.Sequential(
             ConvBlock(in_channels, hid_dim//8),
-            nn.AvgPool2d(kernel_size=2, stride=2),
+            nn.AvgPool1d(kernel_size=2, stride=2),
             ConvBlock(hid_dim//8, hid_dim//4),
-            nn.AvgPool2d(kernel_size=2, stride=2),
+            nn.AvgPool1d(kernel_size=2, stride=2),
             ConvBlock(hid_dim//4, hid_dim//2),
-            nn.AvgPool2d(kernel_size=2, stride=2),
+            nn.AvgPool1d(kernel_size=2, stride=2),
             ConvBlock(hid_dim//2, hid_dim),
         )
 
@@ -28,6 +29,12 @@ class BasicConvClassifier(nn.Module):
             nn.AdaptiveAvgPool1d(1),
             Rearrange("b d 1 -> b d"),
             nn.Linear(hid_dim, num_classes),
+        )
+
+        self.subject_head = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            Rearrange("b d 1 -> b d"),
+            nn.Linear(hid_dim, num_subjects),
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
@@ -39,7 +46,10 @@ class BasicConvClassifier(nn.Module):
         """
         X = self.blocks(X)
 
-        return self.head(X)
+        class_logits = self.class_head(X)
+        subject_logits = self.subject_head(X)
+        
+        return class_logits, subject_logits
 
 
 class ConvBlock(nn.Module):
