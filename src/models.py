@@ -10,8 +10,8 @@ class BasicConvClassifier(nn.Module):
         num_classes: int,
         seq_len: int,
         in_channels: int,
+        num_subjects: int,
         hid_dim: int = 2048,
-        num_subjects: int
     ) -> None:
         super().__init__()
 

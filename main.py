@@ -56,7 +56,7 @@ def run(args: DictConfig):
     ).to(args.device)
     
     accuracy_subject = Accuracy(
-        task="multiclass", num_classes=4
+        task="multiclass", num_classes=train_set.num_subjects
     ).to(args.device)
       
     for epoch in range(args.epochs):
