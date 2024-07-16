@@ -25,14 +25,14 @@ def run(args: DictConfig):
     # ------------------    
     test_set = ThingsMEGDataset("test", args.data_dir)
     test_loader = torch.utils.data.DataLoader(
-        test_set, shuffle=False, batch_size=args.batch_size, num_workers=args.num_workers
+        test_set, shuffle=False, pin_memory=True, batch_size=args.batch_size, num_workers=args.num_workers
     )
 
     # ------------------
     #       Model
     # ------------------
     model = BasicConvClassifier(
-        test_set.num_classes, test_set.seq_len, test_set.num_channels
+        test_set.num_classes, test_set.seq_len, test_set.num_channels, test_set.num_subjects
     ).to(args.device)
     model.load_state_dict(torch.load(args.model_path, map_location=args.device))
 

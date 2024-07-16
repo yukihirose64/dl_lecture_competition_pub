@@ -8,13 +8,11 @@ from omegaconf import DictConfig
 import wandb
 from termcolor import cprint
 from tqdm import tqdm
-from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import MinMaxScaler
+import gc
 
 from src.datasets import ThingsMEGDataset
 from src.models import BasicConvClassifier
 from src.utils import set_seed
-
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def run(args: DictConfig):
@@ -27,26 +25,16 @@ def run(args: DictConfig):
     # ------------------
     #    Dataloader
     # ------------------
+    loader_args = {"batch_size": args.batch_size, "num_workers": args.num_workers}
+    
     train_set = ThingsMEGDataset("train", args.data_dir)
-    train_loader = DataLoader(train_set, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-    
-    all_train_data = []
-    for X, _, _ in train_loader:
-        all_train_data.append(X.numpy())
-    
-    all_train_data = np.concatenate(all_train_data, axis=0)
-    all_train_data_reshaped = all_train_data.reshape(-1, train_set.seq_len)
-    scaler = MinMaxScaler()
-    scaler.fit(all_train_data_reshaped)
-    
-    train_set = ThingsMEGDataset("train", args.data_dir, scaler=scaler)
-    val_set = ThingsMEGDataset("val", args.data_dir, scaler=scaler)
-    test_set = ThingsMEGDataset("test", args.data_dir, scaler=scaler)
-    
-    loader_args = {"batch_size": args.batch_size, "num_workers": args.num_workers, "pin_memory": True}
-    train_loader = DataLoader(train_set, shuffle=True, **loader_args)
-    val_loader = DataLoader(val_set, shuffle=False, **loader_args)
-    test_loader = DataLoader(test_set, shuffle=False, **loader_args)
+    train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, pin_memory=True, **loader_args)
+    val_set = ThingsMEGDataset("val", args.data_dir)
+    val_loader = torch.utils.data.DataLoader(val_set, shuffle=False, pin_memory=True, **loader_args)
+    test_set = ThingsMEGDataset("test", args.data_dir)
+    test_loader = torch.utils.data.DataLoader(
+        test_set, shuffle=False, pin_memory=True, batch_size=args.batch_size, num_workers=args.num_workers
+    )
 
     # ------------------
     #       Model
@@ -58,7 +46,7 @@ def run(args: DictConfig):
     # ------------------
     #     Optimizer
     # ------------------
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.02)
 
     # ------------------
     #   Start training
@@ -86,7 +74,7 @@ def run(args: DictConfig):
             
             loss_class = F.cross_entropy(class_logits, y)
             loss_subject = F.cross_entropy(subject_logits, subject_idxs)
-            loss = loss_class + 0.25*loss_subject
+            loss = loss_class + 0.25 * loss_subject
             
             train_loss.append(loss.item())
             
@@ -99,6 +87,10 @@ def run(args: DictConfig):
             
             train_acc_class.append(acc_class.item())
             train_acc_subject.append(acc_subject.item())
+
+            del X, y, subject_idxs, class_logits, subject_logits, loss
+            torch.cuda.empty_cache()
+            gc.collect()
 
         model.eval()
         for X, y, subject_idxs in tqdm(val_loader, desc="Validation"):
@@ -114,6 +106,10 @@ def run(args: DictConfig):
             val_loss.append(val_loss_combined)
             val_acc_class.append(accuracy_class(class_logits, y).item())
             val_acc_subject.append(accuracy_subject(subject_logits, subject_idxs).item())
+
+            del X, y, subject_idxs, class_logits, subject_logits
+            torch.cuda.empty_cache()
+            gc.collect()
 
         print(f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc class: {np.mean(train_acc_class):.3f} | train acc subject: {np.mean(train_acc_subject):.3f} | val loss: {np.mean(val_loss):.3f} | val acc class: {np.mean(val_acc_class):.3f} | val acc subject: {np.mean(val_acc_subject):.3f}")
         torch.save(model.state_dict(), os.path.join(logdir, "model_last.pt"))

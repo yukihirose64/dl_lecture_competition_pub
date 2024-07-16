@@ -3,97 +3,85 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops.layers.torch import Rearrange
 
-
 class BasicConvClassifier(nn.Module):
     def __init__(
         self,
-        num_classes: int,
+        nb_classes: int,
         seq_len: int,
         in_channels: int,
         num_subjects: int,
-        hid_dim: int = 2048,
+        dropoutRate: float = 0.5,
+        kernLength: int = 32,
+        F1: int = 48,
+        D: int = 1,
+        F2: int = 48,
+        dropoutType: str = 'Dropout'
     ) -> None:
         super().__init__()
 
-        self.blocks = nn.Sequential(
-            ConvBlock(in_channels, hid_dim//8),
-            nn.AvgPool1d(kernel_size=2, stride=2),
-            ConvBlock(hid_dim//8, hid_dim//4),
-            nn.AvgPool1d(kernel_size=2, stride=2),
-            ConvBlock(hid_dim//4, hid_dim//2),
-            nn.AvgPool1d(kernel_size=2, stride=2),
-            ConvBlock(hid_dim//2, hid_dim),
+        self.dropoutType = nn.Dropout if dropoutType == 'Dropout' else nn.Dropout2d
+
+        self.temporal_conv = nn.Sequential(
+            nn.Conv2d(1, F1, (1, kernLength), padding=(0, kernLength // 2), bias=False),
+            nn.BatchNorm2d(F1),
+            nn.GELU()
         )
+        
+        self.depthwise_conv = nn.Sequential(
+            nn.Conv2d(F1, F1 * D, (in_channels, 1), groups=F1, bias=False),
+            nn.BatchNorm2d(F1 * D),
+            nn.GELU(),
+            nn.AvgPool2d((1, 2)),
+            self.dropoutType(dropoutRate)
+        )
+        
+        self.separable_conv = nn.Sequential(
+            nn.Conv2d(F1 * D, F2, (1, 16), padding=(0, 8), bias=False),
+            nn.BatchNorm2d(F2),
+            nn.GELU(),
+            nn.AvgPool2d((1, 2)),
+            self.dropoutType(dropoutRate)
+        )
+
+        self.flat_dim = self._get_flat_dim(in_channels, seq_len)
 
         self.class_head = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
-            Rearrange("b d 1 -> b d"),
-            nn.Linear(hid_dim, num_classes),
+            nn.Linear(self.flat_dim, nb_classes)
         )
-
+        
         self.subject_head = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
-            Rearrange("b d 1 -> b d"),
-            nn.Linear(hid_dim, num_subjects),
+            nn.Linear(self.flat_dim, num_subjects)
         )
 
-        nn.init.kaiming_normal_(self.class_head[2].weight, nonlinearity='relu')
-        nn.init.zeros_(self.class_head[2].bias)
-        
-        nn.init.kaiming_normal_(self.subject_head[2].weight, nonlinearity='relu')
-        nn.init.zeros_(self.subject_head[2].bias)
-        
+        self._initialize_weights()
+
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """_summary_
         Args:
-            X ( b, c, t ): _description_
+            X (b, c, t): _description_
         Returns:
-            X ( b, num_classes ): _description_
+            X (b, num_classes): _description_
         """
-        X = self.blocks(X)
+        X = X.unsqueeze(1)
+        X = self.temporal_conv(X)
+        X = self.depthwise_conv(X)
+        X = self.separable_conv(X)
+        X = X.flatten(start_dim=1)
 
         class_logits = self.class_head(X)
         subject_logits = self.subject_head(X)
         
         return class_logits, subject_logits
 
+    def _get_flat_dim(self, in_channels, seq_len):
+        dummy_input = torch.zeros(1, 1, in_channels, seq_len)
+        with torch.no_grad():
+            dummy_output = self.separable_conv(self.depthwise_conv(self.temporal_conv(dummy_input)))
+        return dummy_output.numel()
 
-class ConvBlock(nn.Module):
-    def __init__(
-        self,
-        in_dim,
-        out_dim,
-        kernel_size: int = 3,
-        p_drop: float = 0.25,
-    ) -> None:
-        super().__init__()
-        
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-
-        self.conv0 = nn.Conv1d(in_dim, out_dim, kernel_size, padding="same")
-        # self.conv1 = nn.Conv1d(out_dim, out_dim, kernel_size, padding="same")
-        # self.conv2 = nn.Conv1d(out_dim, out_dim, kernel_size) # , padding="same")
-        
-        self.batchnorm0 = nn.BatchNorm1d(num_features=out_dim)
-        # self.batchnorm1 = nn.BatchNorm1d(num_features=out_dim)
-
-        self.dropout = nn.Dropout(p_drop)
-
-        nn.init.kaiming_normal_(self.conv0.weight, nonlinearity='relu')
-
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
-        if self.in_dim == self.out_dim:
-            X = self.conv0(X) + X  # skip connection
-        else:
-            X = self.conv0(X)
-
-        X = F.relu(self.batchnorm0(X))
-
-        # X = self.conv1(X) + X  # skip connection
-        # X = F.gelu(self.batchnorm1(X))
-
-        # X = self.conv2(X)
-        # X = F.glu(X, dim=-2)
-
-        return self.dropout(X)
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='linear')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
