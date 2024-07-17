@@ -41,8 +41,10 @@ def run(args: DictConfig):
     # ------------------ 
     preds = [] 
     model.eval()
-    for X, subject_idxs in tqdm(test_loader, desc="Validation"):        
-        preds.append(model(X.to(args.device)).detach().cpu())
+    for X, subject_idxs in tqdm(test_loader, desc="Validation"):
+        X = X.to(args.device)
+        class_logits, subject_logits = model(X)
+        preds.append(class_logits.detach().cpu())
         
     preds = torch.cat(preds, dim=0).numpy()
     np.save(os.path.join(savedir, "submission"), preds)

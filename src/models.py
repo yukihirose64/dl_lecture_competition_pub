@@ -3,6 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops.layers.torch import Rearrange
 
+class MaxNormLinear(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True, max_norm=1.0):
+        super().__init__(in_features, out_features, bias)
+        self.max_norm = max_norm
+
+    def forward(self, input):
+        self.weight.data = torch.renorm(self.weight.data, p=2, dim=0, maxnorm=self.max_norm)
+        return F.linear(input, self.weight, self.bias)
+    
 class BasicConvClassifier(nn.Module):
     def __init__(
         self,
@@ -11,11 +20,12 @@ class BasicConvClassifier(nn.Module):
         in_channels: int,
         num_subjects: int,
         dropoutRate: float = 0.5,
-        kernLength: int = 32,
-        F1: int = 48,
+        kernLength: int = 16,
+        F1: int = 96,
         D: int = 1,
-        F2: int = 48,
-        dropoutType: str = 'Dropout'
+        F2: int = 96,
+        max_norm: float = 1,
+        dropoutType: str = 'Dropout',
     ) -> None:
         super().__init__()
 
@@ -46,7 +56,7 @@ class BasicConvClassifier(nn.Module):
         self.flat_dim = self._get_flat_dim(in_channels, seq_len)
 
         self.class_head = nn.Sequential(
-            nn.Linear(self.flat_dim, nb_classes)
+            MaxNormLinear(self.flat_dim, nb_classes, max_norm=max_norm)
         )
         
         self.subject_head = nn.Sequential(

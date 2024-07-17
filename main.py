@@ -46,7 +46,7 @@ def run(args: DictConfig):
     # ------------------
     #     Optimizer
     # ------------------
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.02)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # ------------------
     #   Start training
