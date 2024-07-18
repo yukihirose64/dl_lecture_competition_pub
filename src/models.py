@@ -24,7 +24,7 @@ class BasicConvClassifier(nn.Module):
         F1: int = 96,
         D: int = 1,
         F2: int = 96,
-        max_norm: float = 1,
+        max_norm: float = 2,
         dropoutType: str = 'Dropout',
     ) -> None:
         super().__init__()

@@ -18,7 +18,7 @@ from src.utils import set_seed
 def run(args: DictConfig):
     set_seed(args.seed)
     logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-    
+
     if args.use_wandb:
         wandb.init(mode="online", dir=logdir, project="MEG-classification")
 
